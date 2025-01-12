@@ -45,12 +45,13 @@ class RealESRGANer():
         self.half = half
 
         # initialize model
+        print(f'initialize model:{model_path}')
         if gpu_id:
             self.device = torch.device(
                 f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu') if device is None else device
         else:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if device is None else device
-
+        print(f'initialize device:{self.device}')
         if isinstance(model_path, list):
             # dni
             assert len(model_path) == len(dni_weight), 'model_path and dni_weight should have the save length.'
@@ -60,17 +61,19 @@ class RealESRGANer():
             if model_path.startswith('https://'):
                 model_path = load_file_from_url(
                     url=model_path, model_dir=os.path.join(ROOT_DIR, 'weights'), progress=True, file_name=None)
-            loadnet = torch.load(model_path, map_location=torch.device('cpu'))
+            loadnet = torch.load(model_path, map_location=torch.device('cpu'),weights_only=True)
 
         # prefer to use params_ema
         if 'params_ema' in loadnet:
             keyname = 'params_ema'
         else:
             keyname = 'params'
+
         model.load_state_dict(loadnet[keyname], strict=True)
 
         model.eval()
         self.model = model.to(self.device)
+        print(f'model eval end')
         if self.half:
             self.model = self.model.half()
 
@@ -79,6 +82,7 @@ class RealESRGANer():
 
         ``Paper: Deep Network Interpolation for Continuous Imagery Effect Transition``
         """
+        print('dni')
         net_a = torch.load(net_a, map_location=torch.device(loc))
         net_b = torch.load(net_b, map_location=torch.device(loc))
         for k, v_a in net_a[key].items():
@@ -92,7 +96,6 @@ class RealESRGANer():
         self.img = img.unsqueeze(0).to(self.device)
         if self.half:
             self.img = self.img.half()
-
         # pre_pad
         if self.pre_pad != 0:
             self.img = F.pad(self.img, (0, self.pre_pad, 0, self.pre_pad), 'reflect')
@@ -214,19 +217,20 @@ class RealESRGANer():
         else:
             img_mode = 'RGB'
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
+        print('process image')
         # ------------------- process image (without the alpha channel) ------------------- #
         self.pre_process(img)
         if self.tile_size > 0:
             self.tile_process()
         else:
             self.process()
+        print('process end')
         output_img = self.post_process()
         output_img = output_img.data.squeeze().float().cpu().clamp_(0, 1).numpy()
         output_img = np.transpose(output_img[[2, 1, 0], :, :], (1, 2, 0))
         if img_mode == 'L':
             output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2GRAY)
-
+        print(' process the alpha channel if necessary')
         # ------------------- process the alpha channel if necessary ------------------- #
         if img_mode == 'RGBA':
             if alpha_upsampler == 'realesrgan':
@@ -242,11 +246,10 @@ class RealESRGANer():
             else:  # use the cv2 resize for alpha channel
                 h, w = alpha.shape[0:2]
                 output_alpha = cv2.resize(alpha, (w * self.scale, h * self.scale), interpolation=cv2.INTER_LINEAR)
-
             # merge the alpha channel
             output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2BGRA)
             output_img[:, :, 3] = output_alpha
-
+        print('return')
         # ------------------------------ return ------------------------------ #
         if max_range == 65535:  # 16-bit image
             output = (output_img * 65535.0).round().astype(np.uint16)
